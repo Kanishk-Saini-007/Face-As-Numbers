@@ -107,9 +107,9 @@ footer a:hover{border-bottom-color:var(--phos)}
       <div class="log" id="log">&gt; standing by — start the camera or load the demo image</div>
     </div>
     <div class="panel">
-      <div class="ptag"><i>02</i> // OUTPUT — NETWORK ACTIVATIONS</div>
+      <div class="ptag"><i>02</i> // OUTPUT — FRAME AS NUMBERS</div>
       <canvas class="stage" id="numCanvas" width="640" height="480"></canvas>
-      <div class="log" id="log2">&gt; each digit is a real filter response (0-9) from the detection network's first conv layer, recomputed live from the detected face crop</div>
+      <div class="log" id="log2">&gt; each digit's darkness blends real first-conv-layer filter responses with frame intensity - recomputed live from the frame</div>
     </div>
   </div>
 
@@ -120,7 +120,7 @@ footer a:hover{border-bottom-color:var(--phos)}
       <span>DETECTOR <i>SSD-MNv1</i></span>
       <span>LANDMARKS <i>68pt</i></span>
       <span>EMBEDDING <i>ResNet-34 · 128-D</i></span>
-      <span>WALL SRC <i>SSD conv_0 &middot; face crop</i></span>
+      <span>WALL SRC <i>conv_0 responses + intensity</i></span>
       <span>GRID <i id="statGrid">—</i></span>
       <span>FEED <i id="statFeed">—</i></span>
       <span>INFERENCE <i id="statInf">—</i></span>
@@ -140,7 +140,7 @@ footer a:hover{border-bottom-color:var(--phos)}
 <script>
 (function(){
 "use strict";
-var W=640,H=480,CELL=7;
+var W=640,H=480,CELL=5;
 var GW=Math.floor(W/CELL),GH=Math.floor(H/CELL);
 function fitWall(){
   var r=numC.getBoundingClientRect();
@@ -160,11 +160,15 @@ var pill=document.getElementById('pill'),logEl=document.getElementById('log'),hi
 var btnCam=document.getElementById('btnCam'),btnDemo=document.getElementById('btnDemo'),btnPause=document.getElementById('btnPause');
 var grid=document.getElementById('dgrid'),dstate=document.getElementById('dstate');
 
-// scratch canvas for the padded face crop fed to the conv layer
-var faceC=document.createElement('canvas');faceC.width=320;faceC.height=240;
-var faceX=faceC.getContext('2d');
-// real activation map state (mapW x mapH floats, 0..1)
-var MAPW=80, MAPH=80;
+// real data map state (MAPW x MAPH floats, 0..1 darkness)
+var MAPW=160, MAPH=120;
+function pctNorm(a,lo,hi){
+  var s=Float32Array.from(a).sort();
+  var l=s[(s.length*lo)|0], h=s[Math.min(s.length-1,(s.length*hi)|0)];
+  var r=Math.max(1e-6,h-l), m=new Float32Array(a.length);
+  for(var i=0;i<a.length;i++){ var v=(a[i]-l)/r; m[i]=v<0?0:(v>1?1:v); }
+  return m;
+}
 var actMap=null, actBusy=false, actCost=0, actEvery=160, lastAct=0;
 // demo source canvas
 var demoC=document.createElement('canvas');demoC.width=W;demoC.height=H;
@@ -409,40 +413,25 @@ function drawOverlay(){
 function computeActMap(){
   if(actBusy||!modelsReady||!srcReady())return;
   var s=src(); if(!s)return;
-  var d=lastDet;
-  if(!d||(Date.now()-lastDetAt)>2500){ actMap=null; return; }   // quiet idle when no face
   actBusy=true;
   var t0=performance.now();
   try{
-    // padded detection box, expanded to 4:3 so the face fills the panel undistorted
-    var b=d.detection.box;
-    var SW=(mode==='camera'&&video.videoWidth)?video.videoWidth:W;
-    var SH=(mode==='camera'&&video.videoHeight)?video.videoHeight:H;
-    var cx=b.x+b.width/2, cy=b.y+b.height/2;
-    var cw=b.width*1.7, ch=b.height*1.7;
-    if(cw/ch<4/3) cw=ch*4/3; else ch=cw*3/4;
-    var sw=Math.min(cw,SW), sh=sw*3/4;
-    if(sh>SH){ sh=SH; sw=sh*4/3; }
-    var sx=Math.max(0,Math.min(SW-sw,cx-sw/2));
-    var sy=Math.max(0,Math.min(SH-sh,cy-sh/2));
-    faceX.drawImage(s,sx,sy,sw,sh,0,0,320,240);
     var t=faceapi.tf;
     var mv=faceapi.nets.ssdMobilenetv1.params.mobilenetv1;
     var out=t.tidy(function(){
-      var x=t.browser.fromPixels(faceC,3).toFloat();
-      x=t.image.resizeBilinear(x,[240,320]);
-      x=x.div(127.5).sub(1).expandDims(0);
-      x=t.conv2d(x,mv.conv_0.filters,[1,1],'same');      // the detection backbone's real first conv layer
-      x=t.mean(t.abs(x),3).squeeze();                   // [240,320] mean filter-response magnitude per position
-      return t.stridedSlice(x,[0,0],[240,320],[3,4]);   // [80,80]
+      var img=t.image.resizeBilinear(t.browser.fromPixels(s,3).toFloat(),[240,320]);
+      var x=img.div(127.5).sub(1).expandDims(0);
+      var raw=t.conv2d(x,mv.conv_0.filters,[1,1],'same');   // the detection backbone's real first conv layer
+      var resp=t.mean(t.abs(raw),3).squeeze();              // filter-response magnitude per position
+      var lum=t.mean(img,2).div(255);                       // frame intensity per position
+      return t.stack([t.stridedSlice(resp,[0,0],[240,320],[2,2]), t.stridedSlice(lum,[0,0],[240,320],[2,2])]);
     });
     var data=out.dataSync(); out.dispose();
-    // robust per-frame normalization (p5..p98)
-    var sorted=Float32Array.from(data).sort();
-    var lo=sorted[(sorted.length*0.05)|0], hi=sorted[Math.min(sorted.length-1,(sorted.length*0.98)|0)];
-    var rng=Math.max(1e-6,hi-lo);
-    var m=new Float32Array(MAPH*MAPW);
-    for(var i=0;i<data.length;i++){ var v=(data[i]-lo)/rng; m[i]=v<0?0:(v>1?1:v); }
+    var n=MAPH*MAPW;
+    var rN=pctNorm(data.slice(0,n),0.10,0.97);   // per-frame contrast stretch on responses
+    var lN=pctNorm(data.slice(n),0.02,0.98);     // and on intensity
+    var m=new Float32Array(n);
+    for(var i=0;i<n;i++){ var v=0.35*rN[i]+0.65*(1-lN[i]); m[i]=v<0?0:(v>1?1:v); }
     actMap=m;
     actCost=actCost*0.85+(performance.now()-t0)*0.15;
     actEvery=actCost>140?Math.min(600,actCost*1.6):160;
@@ -457,28 +446,20 @@ setInterval(function(){
 },120);
 
 function drawWall(){
-  numX.fillStyle='#000';numX.fillRect(0,0,numC.width,numC.height);
-  if(!actMap){
-    if(mode!=='idle'){
-      numX.font='600 13px JetBrains Mono, monospace';
-      numX.textBaseline='middle';
-      var msg='NO FACE IN FRAME';
-      numX.fillStyle='rgba(214,222,218,0.30)';
-      numX.fillText(msg, Math.round(numC.width/2-numX.measureText(msg).width/2), Math.round(numC.height/2));
-    }
-    return;
-  }
-  numX.font='600 '+(CELL+1)+'px JetBrains Mono, monospace';
+  numX.fillStyle='#f2f3ef';numX.fillRect(0,0,numC.width,numC.height);
+  if(!actMap)return;
+  numX.font='700 '+(CELL+1)+'px JetBrains Mono, monospace';
   numX.textBaseline='top';
   for(var y=0;y<GH;y++){
     var my=Math.min(MAPH-1,(y/GH*MAPH)|0);
     for(var x=0;x<GW;x++){
       var mx=Math.min(MAPW-1,(x/GW*MAPW)|0);
-      var v=actMap[my*MAPW+mx];
-      if(v<0.05)continue;
+      var v=(actMap[my*MAPW+mx]-0.14)/0.86;
+      if(v<=0)continue;
+      if(v>1)v=1;
       var d=Math.min(9,(v*9.999)|0);
-      var a=0.10+v*0.90;
-      numX.fillStyle='rgba(232,238,235,'+a.toFixed(3)+')';
+      var a=Math.pow(v,1.35);
+      numX.fillStyle='rgba(14,18,16,'+a.toFixed(3)+')';
       numX.fillText(d,x*CELL,y*CELL);
     }
   }

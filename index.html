@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Face As Numbers — Real-Time Encoding</title>
+<meta name="description" content="Watch a face become a wall of numbers in real time. Face detection, 68 landmarks and a 128-dimensional descriptor, running entirely in your browser.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#060808; --panel:#0a0d0d; --line:rgba(120,255,190,.14); --line2:rgba(120,255,190,.28);
+  --ink:#cfe8da; --dim:#5f7a6d; --phos:#7dffb0; --amber:#ffb454; --red:#ff5d5d;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{background:var(--bg);color:var(--ink);font-family:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;min-height:100%}
+body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:50;opacity:.05;
+  background:repeating-linear-gradient(0deg,#000 0 1px,transparent 1px 3px)}
+.wrap{max-width:1560px;margin:0 auto;padding:22px 26px 40px}
+
+/* header */
+header{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;
+  border:1px solid var(--line);padding:12px 18px;position:relative;background:var(--panel)}
+.rec{color:var(--red);font-size:12px;letter-spacing:.18em;white-space:nowrap}
+.rec b{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--red);margin-right:8px;animation:blink 1.2s steps(2) infinite}
+@keyframes blink{50%{opacity:.15}}
+.pill{font-size:11px;letter-spacing:.22em;padding:7px 16px;border:1px solid var(--line2);color:var(--phos);position:relative}
+.pill::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--phos);margin-right:9px;vertical-align:1px}
+.pill.amber{color:var(--amber);border-color:rgba(255,180,84,.4)}.pill.amber::before{background:var(--amber)}
+.pill.red{color:var(--red);border-color:rgba(255,93,93,.4)}.pill.red::before{background:var(--red)}
+.title{font-size:12px;letter-spacing:.24em;color:var(--dim);white-space:nowrap}
+.title b{color:var(--ink);font-weight:800}
+.title i{color:var(--phos);font-style:normal}
+
+/* controls */
+.controls{display:flex;gap:10px;flex-wrap:wrap;margin:16px 0 18px}
+.btn{font-family:inherit;font-size:11px;letter-spacing:.2em;padding:11px 20px;cursor:pointer;background:transparent;color:var(--ink);
+  border:1px solid var(--line2);transition:all .15s}
+.btn:hover:not(:disabled){background:rgba(125,255,176,.08);border-color:var(--phos);color:var(--phos)}
+.btn:disabled{opacity:.35;cursor:not-allowed}
+.btn.primary{border-color:var(--phos);color:var(--phos)}
+.btn.primary:hover:not(:disabled){background:var(--phos);color:#04120a}
+
+/* split */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.panel{border:1px solid var(--line);background:var(--panel);position:relative;padding:10px}
+.panel::before,.panel::after{content:"";position:absolute;width:14px;height:14px;pointer-events:none}
+.panel::before{top:-1px;left:-1px;border-top:1px solid var(--phos);border-left:1px solid var(--phos)}
+.panel::after{bottom:-1px;right:-1px;border-bottom:1px solid var(--phos);border-right:1px solid var(--phos)}
+.ptag{position:absolute;top:8px;left:14px;z-index:5;font-size:10px;letter-spacing:.26em;color:var(--dim);
+  background:var(--panel);padding:2px 8px}
+.ptag i{color:var(--phos);font-style:normal}
+canvas.stage{display:block;width:100%;aspect-ratio:4/3;background:#020403}
+.log{margin-top:8px;font-size:10px;letter-spacing:.08em;color:var(--dim);min-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.log i{color:var(--phos);font-style:normal}
+
+/* descriptor */
+.desc{margin-top:18px;border:1px solid var(--line);background:var(--panel);padding:16px 18px;position:relative}
+.dhead{display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;font-size:10px;letter-spacing:.26em;color:var(--dim);margin-bottom:12px}
+.dhead b{color:var(--phos);font-weight:600}
+.dgrid{display:grid;grid-template-columns:repeat(16,1fr);gap:4px 10px}
+.dcell{font-size:10px;color:var(--dim);text-align:right;font-variant-numeric:tabular-nums;transition:color .3s}
+.dcell.on{color:var(--ink)}
+.dcell.tick{color:var(--phos)}
+.stats{margin-top:14px;display:flex;gap:26px;flex-wrap:wrap;font-size:10px;letter-spacing:.18em;color:var(--dim)}
+.stats i{color:var(--ink);font-style:normal}
+
+footer{margin-top:26px;font-size:11px;letter-spacing:.12em;color:var(--dim);display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
+footer a{color:var(--phos);text-decoration:none;border-bottom:1px solid rgba(125,255,176,.3)}
+footer a:hover{border-bottom-color:var(--phos)}
+
+.hint{margin-top:14px;font-size:11px;letter-spacing:.1em;color:var(--dim);line-height:1.7;display:none}
+.hint.show{display:block}
+.hint i{color:var(--amber);font-style:normal}
+
+@media(max-width:980px){
+  .split{grid-template-columns:1fr}
+  .dgrid{grid-template-columns:repeat(8,1fr)}
+  .wrap{padding:14px 14px 30px}
+  .title{white-space:normal}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="rec"><b></b>FEED</div>
+    <div class="pill amber" id="pill">LOADING MODELS</div>
+    <div class="title"><i>&lt;/&gt;</i> <b>FACE AS NUMBERS</b> — REAL-TIME ENCODING</div>
+  </header>
+
+  <div class="controls">
+    <button class="btn primary" id="btnCam" disabled>START CAMERA</button>
+    <button class="btn" id="btnDemo" disabled>DEMO IMAGE</button>
+    <button class="btn" id="btnPause" disabled>PAUSE</button>
+  </div>
+  <div class="hint" id="hint"><i>// camera blocked or unavailable.</i> allow camera access in the address bar and press START CAMERA again — or run the DEMO IMAGE, no camera needed. everything still runs locally.</div>
+
+  <div class="split">
+    <div class="panel">
+      <div class="ptag"><i>01</i> // INPUT — OPTICAL FEED</div>
+      <canvas class="stage" id="camCanvas" width="640" height="480"></canvas>
+      <div class="log" id="log">&gt; standing by — start the camera or load the demo image</div>
+    </div>
+    <div class="panel">
+      <div class="ptag"><i>02</i> // OUTPUT — NUMERIC PROJECTION</div>
+      <canvas class="stage" id="numCanvas" width="640" height="480"></canvas>
+      <div class="log" id="log2">&gt; each digit is one cell of the frame, weighted by brightness</div>
+    </div>
+  </div>
+
+  <div class="desc">
+    <div class="dhead"><span><b>128-D</b> FACE DESCRIPTOR VALUES</span><span id="dstate">NO EMBEDDING</span></div>
+    <div class="dgrid" id="dgrid"></div>
+    <div class="stats">
+      <span>DETECTOR <i>TinyFace</i></span>
+      <span>LANDMARKS <i>68pt</i></span>
+      <span>EMBEDDING <i>ResNet-34 · 128-D</i></span>
+      <span>GRID <i id="statGrid">—</i></span>
+      <span>INFERENCE <i id="statInf">—</i></span>
+    </div>
+  </div>
+
+  <footer>
+    <span>100% in-browser · no video leaves this device</span>
+    <span>built by <a href="https://github.com/Kanishk-Saini-007" target="_blank" rel="noopener">Kanishk Saini</a> · a computer-vision learning experiment</span>
+  </footer>
+</div>
+
+<video id="video" width="640" height="480" autoplay muted playsinline style="display:none"></video>
+<img id="demoImg" src="demo-face.png" style="display:none" alt="">
+
+<script src="face-api.min.js"></script>
+<script>
+(function(){
+"use strict";
+var W=640,H=480,CELL=8;
+var GW=Math.floor(W/CELL),GH=Math.floor(H/CELL);
+var video=document.getElementById('video');
+var camC=document.getElementById('camCanvas'),camX=camC.getContext('2d');
+var numC=document.getElementById('numCanvas'),numX=numC.getContext('2d');
+var pill=document.getElementById('pill'),logEl=document.getElementById('log'),hint=document.getElementById('hint');
+var btnCam=document.getElementById('btnCam'),btnDemo=document.getElementById('btnDemo'),btnPause=document.getElementById('btnPause');
+var grid=document.getElementById('dgrid'),dstate=document.getElementById('dstate');
+document.getElementById('statGrid').textContent=GW+'x'+GH;
+
+// scratch canvas for pixel sampling
+var samp=document.createElement('canvas');samp.width=GW;samp.height=GH;
+var sampX=samp.getContext('2d',{willReadFrequently:true});
+// demo source canvas
+var demoC=document.createElement('canvas');demoC.width=W;demoC.height=H;
+var demoX=demoC.getContext('2d');
+
+var cells=[];
+for(var i=0;i<128;i++){var s=document.createElement('span');s.className='dcell';s.textContent='0.000';grid.appendChild(s);cells.push(s);}
+
+var mode='idle';          // idle | camera | demo
+var paused=false;
+var lastDet=null,lastDetAt=0;
+var detecting=false,modelsReady=false;
+var detOptions=null;
+var lastInfMs=0;
+var prevDesc=null;
+
+function setPill(txt,cls){pill.textContent=txt;pill.className='pill'+(cls?' '+cls:'');}
+function log(m){logEl.innerHTML='&gt; '+m;}
+
+function loadModels(){
+  setPill('LOADING MODELS','amber');
+  Promise.all([
+    faceapi.nets.tinyFaceDetector.loadFromUri('models'),
+    faceapi.nets.faceLandmark68Net.loadFromUri('models'),
+    faceapi.nets.faceRecognitionNet.loadFromUri('models')
+  ]).then(function(){
+    modelsReady=true;
+    detOptions=new faceapi.TinyFaceDetectorOptions({inputSize:320,scoreThreshold:0.35});
+    setPill('CAMERA OFF','amber');
+    btnCam.disabled=false;btnDemo.disabled=false;
+    log('models loaded — detector + 68pt landmarks + 128-d embedder, all local');
+  }).catch(function(e){
+    setPill('MODEL LOAD FAILED','red');
+    log('could not load model files — check the /models folder');
+  });
+}
+
+function startCamera(){
+  if(!modelsReady)return;
+  if(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia){
+    navigator.mediaDevices.getUserMedia({video:{width:W,height:H,facingMode:'user'},audio:false})
+    .then(function(stream){
+      video.srcObject=stream;mode='camera';hint.className='hint';
+      video.onloadeddata=function(){resume();log('optical feed live — hold still for the first lock');};
+    })
+    .catch(function(){
+      setPill('CAMERA BLOCKED','red');
+      hint.className='hint show';
+      log('camera unavailable — demo image still works');
+    });
+  }else{
+    setPill('CAMERA UNSUPPORTED','red');
+    hint.className='hint show';
+  }
+}
+
+function startDemo(){
+  if(!modelsReady)return;
+  var img=document.getElementById('demoImg');
+  function go(){
+    demoX.fillStyle='#0a0d0d';demoX.fillRect(0,0,W,H);
+    // upscale the 150px test face to fill the 4:3 stage
+    demoX.imageSmoothingEnabled=true;
+    var s=Math.min(W/img.width,H/img.height)*1.15;
+    var dw=img.width*s,dh=img.height*s;
+    demoX.drawImage(img,(W-dw)/2,(H-dh)/2,dw,dh);
+    mode='demo';resume();
+    log('demo frame loaded — sample face from the face-api.js test set');
+  }
+  if(img.complete&&img.naturalWidth){go();}else{img.onload=go;img.onerror=function(){setPill('DEMO IMAGE MISSING','red');};}
+}
+
+function pause(){
+  if(mode==='idle')return;
+  paused=true;btnPause.textContent='RESUME';
+  setPill('DETECTION PAUSED','amber');
+  log('paused — frame frozen, numbers hold');
+}
+function resume(){
+  paused=false;btnPause.textContent='PAUSE';btnPause.disabled=false;
+  tick();
+}
+
+function src(){return mode==='camera'?video:(mode==='demo'?demoC:null);}
+function srcReady(){
+  if(mode==='camera')return video.readyState>=2;
+  if(mode==='demo')return true;
+  return false;
+}
+
+async function detectOnce(){
+  if(detecting||paused||!modelsReady||!srcReady())return;
+  detecting=true;
+  var t0=performance.now();
+  try{
+    var det=await faceapi.detectSingleFace(src(),detOptions).withFaceLandmarks().withFaceDescriptor();
+    lastInfMs=Math.round(performance.now()-t0);
+    document.getElementById('statInf').textContent=lastInfMs+' ms';
+    if(det){
+      lastDet=det;lastDetAt=Date.now();
+      if(!paused)setPill('DETECTION ACTIVE');
+      var b=det.detection.box;
+      log('<i>lock</i> — face @ ('+Math.round(b.x)+','+Math.round(b.y)+') '+Math.round(b.width)+'x'+Math.round(b.height)+' · conf '+det.detection.score.toFixed(2)+' · '+lastInfMs+'ms');
+      renderDesc(det.descriptor);
+    }else{
+      lastDet=null;
+      if(!paused)setPill('SCANNING','amber');
+      log('scanning — no face in frame · '+lastInfMs+'ms');
+      renderDesc(null);
+    }
+  }catch(e){/* keep looping */}
+  detecting=false;
+}
+
+function renderDesc(desc){
+  if(!desc){
+    dstate.textContent='NO EMBEDDING';
+    for(var i=0;i<128;i++){cells[i].textContent='0.000';cells[i].className='dcell';}
+    prevDesc=null;return;
+  }
+  dstate.textContent='EMBEDDING LIVE';
+  for(var i=0;i<128;i++){
+    var v=desc[i];
+    cells[i].textContent=(v>=0?'+':'')+v.toFixed(3);
+    var changed=prevDesc&&Math.abs(prevDesc[i]-v)>0.004;
+    cells[i].className='dcell on'+(changed?' tick':'');
+  }
+  prevDesc=Float32Array.from(desc);
+}
+
+function drawOverlay(){
+  camX.fillStyle='#020403';camX.fillRect(0,0,W,H);
+  var s=src();if(!s||!srcReady())return;
+  var mirror=(mode==='camera');
+  camX.save();
+  if(mirror){camX.translate(W,0);camX.scale(-1,1);}
+  camX.drawImage(s,0,0,W,H);
+  camX.restore();
+  if(lastDet&&(Date.now()-lastDetAt)<900){
+    var b=lastDet.detection.box;
+    var bx=mirror?(W-b.x-b.width):b.x;
+    camX.strokeStyle='rgba(125,255,176,.9)';camX.lineWidth=1.5;
+    camX.strokeRect(bx,b.y,b.width,b.height);
+    // corner accents
+    camX.lineWidth=3;
+    var L=Math.min(18,b.width/4);
+    [[bx,b.y,1,1],[bx+b.width,b.y,-1,1],[bx,b.y+b.height,1,-1],[bx+b.width,b.y+b.height,-1,-1]].forEach(function(c){
+      camX.beginPath();camX.moveTo(c[0]+c[2]*L,c[1]);camX.lineTo(c[0],c[1]);camX.lineTo(c[0],c[1]+c[3]*L);camX.stroke();
+    });
+    camX.fillStyle='rgba(125,255,176,.9)';
+    var pts=lastDet.landmarks.positions;
+    for(var i=0;i<pts.length;i++){
+      var px=mirror?(W-pts[i].x):pts[i].x;
+      camX.fillRect(px-1,pts[i].y-1,2,2);
+    }
+    camX.font='10px JetBrains Mono, monospace';
+    camX.fillStyle='rgba(125,255,176,.95)';
+    camX.fillText('FACE // ID 001 // '+lastDet.detection.score.toFixed(2),bx,Math.max(12,b.y-8));
+    camX.fillStyle='rgba(95,122,109,.9)';
+    camX.fillText('68 LANDMARKS LOCKED',bx,b.y+b.height+16);
+  }
+}
+
+function drawWall(){
+  var s=src();
+  numX.fillStyle='#020403';numX.fillRect(0,0,W,H);
+  if(!s||!srcReady())return;
+  sampX.drawImage(s,0,0,GW,GH);
+  var data;
+  try{data=sampX.getImageData(0,0,GW,GH).data;}catch(e){return;}
+  numX.font='600 '+(CELL+1)+'px JetBrains Mono, monospace';
+  numX.textBaseline='top';
+  for(var y=0;y<GH;y++){
+    for(var x=0;x<GW;x++){
+      var o=(y*GW+x)*4;
+      var lum=0.299*data[o]+0.587*data[o+1]+0.114*data[o+2];
+      var dark=1-lum/255;
+      if(dark<0.1)continue;
+      var d=(Math.random()*10)|0;
+      var a=0.08+dark*0.9;
+      numX.fillStyle='rgba(148,255,196,'+a.toFixed(3)+')';
+      numX.fillText(d,x*CELL,y*CELL);
+    }
+  }
+}
+
+var wallFlip=false;
+function tick(){
+  if(paused||mode==='idle')return;
+  drawOverlay();
+  wallFlip=!wallFlip;
+  if(wallFlip)drawWall();   // wall at ~half frame rate: flicker without jank
+  requestAnimationFrame(tick);
+}
+setInterval(detectOnce,140);
+
+btnCam.addEventListener('click',startCamera);
+btnDemo.addEventListener('click',startDemo);
+btnPause.addEventListener('click',function(){paused?resume():pause();});
+
+loadModels();
+})();
+</script>
+</body>
+</html>

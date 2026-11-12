@@ -94,8 +94,10 @@ footer a:hover{border-bottom-color:var(--phos)}
     <button class="btn primary" id="btnCam" disabled>START CAMERA</button>
     <button class="btn" id="btnDemo" disabled>DEMO IMAGE</button>
     <button class="btn" id="btnPause" disabled>PAUSE</button>
+    <button class="btn" id="btnSwitch" disabled>SWITCH CAMERA</button>
   </div>
   <div class="hint" id="hint"><i>// camera blocked or unavailable.</i> allow camera access in the address bar and press START CAMERA again — or run the DEMO IMAGE, no camera needed. everything still runs locally.</div>
+  <div class="hint" id="hintBlack"><i>// black feed checklist:</i> 1) Windows Settings &gt; Privacy &amp; security &gt; Camera &gt; let desktop apps access your camera. 2) close anything else holding the camera (WhatsApp / Teams / Meet / OBS). 3) check the laptop's physical camera shutter or the Fn camera key. 4) press SWITCH CAMERA to try another device.</div>
 
   <div class="split">
     <div class="panel">
@@ -118,6 +120,7 @@ footer a:hover{border-bottom-color:var(--phos)}
       <span>LANDMARKS <i>68pt</i></span>
       <span>EMBEDDING <i>ResNet-34 · 128-D</i></span>
       <span>GRID <i id="statGrid">—</i></span>
+      <span>FEED <i id="statFeed">—</i></span>
       <span>INFERENCE <i id="statInf">—</i></span>
     </div>
   </div>
@@ -156,6 +159,12 @@ var cells=[];
 for(var i=0;i<128;i++){var s=document.createElement('span');s.className='dcell';s.textContent='0.000';grid.appendChild(s);cells.push(s);}
 
 var mode='idle';          // idle | camera | demo
+var stream=null, camIndex=0, camDevs=[], blackStreak=0, feedOk=false;
+var hintB=document.getElementById('hintBlack');
+var statFeed=document.getElementById('statFeed');
+var btnSwitch=document.getElementById('btnSwitch');
+var bwC=document.createElement('canvas'); bwC.width=16; bwC.height=12;
+var bwX=bwC.getContext('2d',{willReadFrequently:true});
 var paused=false;
 var lastDet=null,lastDetAt=0;
 var detecting=false,modelsReady=false;
@@ -184,24 +193,73 @@ function loadModels(){
   });
 }
 
-function startCamera(){
+function stopStream(){ if(stream){ stream.getTracks().forEach(function(t){t.stop();}); stream=null; } }
+
+function startCamera(deviceId){
   if(!modelsReady)return;
-  if(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia){
-    navigator.mediaDevices.getUserMedia({video:{width:W,height:H,facingMode:'user'},audio:false})
-    .then(function(stream){
-      video.srcObject=stream;mode='camera';hint.className='hint';
-      video.onloadeddata=function(){resume();log('optical feed live — hold still for the first lock');};
-    })
-    .catch(function(){
-      setPill('CAMERA BLOCKED','red');
-      hint.className='hint show';
-      log('camera unavailable — demo image still works');
-    });
-  }else{
-    setPill('CAMERA UNSUPPORTED','red');
-    hint.className='hint show';
-  }
+  stopStream();
+  var cons = deviceId
+    ? {video:{deviceId:{exact:deviceId}},audio:false}
+    : {video:{width:{ideal:640},height:{ideal:480},facingMode:'user'},audio:false};
+  tryGet(cons, deviceId?1:0);
 }
+
+function tryGet(cons, tried){
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+    setPill('CAMERA UNSUPPORTED','red'); hint.className='hint show'; return;
+  }
+  navigator.mediaDevices.getUserMedia(cons).then(function(st){
+    stream=st; video.srcObject=st; mode='camera';
+    hint.className='hint'; hintB.className='hint';
+    blackStreak=0; feedOk=false;
+    video.onloadeddata=function(){
+      if(video.play) video.play().catch(function(){});
+      resume();
+      var label='';
+      try{ label=stream.getVideoTracks()[0].label||''; }catch(e){}
+      statFeed.textContent=video.videoWidth+'x'+video.videoHeight;
+      log('optical feed live — '+(label?label+' — ':'')+video.videoWidth+'x'+video.videoHeight+' — hold still for the first lock');
+      listCams();
+    };
+  }).catch(function(e){
+    var name=(e&&e.name)||'';
+    if(!tried){ tryGet({video:true,audio:false},1); return; }
+    if(name==='NotAllowedError'){ setPill('CAMERA BLOCKED','red'); hint.className='hint show'; log('camera permission denied'); }
+    else if(name==='NotReadableError'||name==='AbortError'){ setPill('CAMERA BUSY','red'); hintB.className='hint show'; log('camera busy — another app may be holding it'); }
+    else if(name==='NotFoundError'||name==='OverconstrainedError'){ setPill('NO CAMERA','red'); log('no usable camera found'); }
+    else { setPill('CAMERA ERROR','red'); log('camera error: '+name); }
+  });
+}
+
+function listCams(){
+  if(!navigator.mediaDevices.enumerateDevices)return;
+  navigator.mediaDevices.enumerateDevices().then(function(ds){
+    camDevs=ds.filter(function(d){return d.kind==='videoinput';});
+    if(camDevs.length>1) btnSwitch.disabled=false;
+  });
+}
+
+// black-frame watchdog: sample the feed once a second
+setInterval(function(){
+  if(mode!=='camera'||paused||!stream||video.readyState<2)return;
+  try{
+    bwX.drawImage(video,0,0,16,12);
+    var d=bwX.getImageData(0,0,16,12).data,sum=0;
+    for(var i=0;i<d.length;i+=4) sum+=d[i]+d[i+1]+d[i+2];
+    var avg=sum/(d.length/4*3);
+    if(avg<8){
+      blackStreak++;
+      if(blackStreak>=4){
+        setPill('BLACK FEED','red'); hintB.className='hint show';
+        log('camera stream is black — run the checklist below');
+      }
+    }else{
+      if(blackStreak>=4){ setPill('SCANNING','amber'); hintB.className='hint'; }
+      blackStreak=0;
+      if(!feedOk){ feedOk=true; log('feed verified — frames flowing, scanning for a face'); }
+    }
+  }catch(e){}
+},1000);
 
 function startDemo(){
   if(!modelsReady)return;
@@ -213,7 +271,7 @@ function startDemo(){
     var s=Math.min(W/img.width,H/img.height);
     var dw=img.width*s,dh=img.height*s;
     demoX.drawImage(img,(W-dw)/2,(H-dh)/2,dw,dh);
-    mode='demo';resume();
+    stopStream(); mode='demo';resume();
     log('demo frame loaded — sample face from the face-api.js test set');
   }
   if(img.complete&&img.naturalWidth){go();}else{img.onload=go;img.onerror=function(){setPill('DEMO IMAGE MISSING','red');};}
@@ -346,6 +404,12 @@ setInterval(detectOnce,140);
 btnCam.addEventListener('click',startCamera);
 btnDemo.addEventListener('click',startDemo);
 btnPause.addEventListener('click',function(){paused?resume():pause();});
+btnSwitch.addEventListener('click',function(){
+  if(camDevs.length<2)return;
+  camIndex=(camIndex+1)%camDevs.length;
+  log('switching to camera '+(camIndex+1)+' of '+camDevs.length);
+  startCamera(camDevs[camIndex].deviceId);
+});
 
 loadModels();
 })();

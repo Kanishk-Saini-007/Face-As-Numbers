@@ -109,7 +109,7 @@ footer a:hover{border-bottom-color:var(--phos)}
     <div class="panel">
       <div class="ptag"><i>02</i> // OUTPUT — NETWORK ACTIVATIONS</div>
       <canvas class="stage" id="numCanvas" width="640" height="480"></canvas>
-      <div class="log" id="log2">&gt; each digit is a real activation value (0-9) sampled live from the detection network's conv layers</div>
+      <div class="log" id="log2">&gt; each digit is a real filter response (0-9) from the detection network's first conv layer, recomputed live from the frame</div>
     </div>
   </div>
 
@@ -120,7 +120,7 @@ footer a:hover{border-bottom-color:var(--phos)}
       <span>DETECTOR <i>SSD-MNv1</i></span>
       <span>LANDMARKS <i>68pt</i></span>
       <span>EMBEDDING <i>ResNet-34 · 128-D</i></span>
-      <span>WALL SRC <i>SSD conv_0-2 activations</i></span>
+      <span>WALL SRC <i>SSD conv_0 responses</i></span>
       <span>GRID <i id="statGrid">—</i></span>
       <span>FEED <i id="statFeed">—</i></span>
       <span>INFERENCE <i id="statInf">—</i></span>
@@ -161,7 +161,7 @@ var btnCam=document.getElementById('btnCam'),btnDemo=document.getElementById('bt
 var grid=document.getElementById('dgrid'),dstate=document.getElementById('dstate');
 
 // real activation map state (mapW x mapH floats, 0..1)
-var MAPW=80, MAPH=60;
+var MAPW=80, MAPH=80;
 var actMap=null, actBusy=false, actCost=0, actEvery=160, lastAct=0;
 // demo source canvas
 var demoC=document.createElement('canvas');demoC.width=W;demoC.height=H;
@@ -415,12 +415,9 @@ function computeActMap(){
       var x=t.browser.fromPixels(s,3).toFloat();
       x=t.image.resizeBilinear(x,[240,320]);
       x=x.div(127.5).sub(1).expandDims(0);
-      x=t.relu(t.add(t.conv2d(x,mv.conv_0.filters,2,'same'),mv.conv_0.batch_norm_offset));
-      x=t.relu(t.add(t.depthwiseConv2d(x,mv.conv_1.depthwise_conv.filters,1,'same'),mv.conv_1.depthwise_conv.batch_norm_offset));
-      x=t.relu(t.add(t.conv2d(x,mv.conv_1.pointwise_conv.filters,1,'valid'),mv.conv_1.pointwise_conv.batch_norm_offset));
-      x=t.relu(t.add(t.depthwiseConv2d(x,mv.conv_2.depthwise_conv.filters,2,'same'),mv.conv_2.depthwise_conv.batch_norm_offset));
-      x=t.relu(t.add(t.conv2d(x,mv.conv_2.pointwise_conv.filters,1,'valid'),mv.conv_2.pointwise_conv.batch_norm_offset));
-      return t.max(x,3).squeeze();  // [60,80] strongest filter response per position
+      x=t.conv2d(x,mv.conv_0.filters,[1,1],'same');      // the detection backbone's real first conv layer
+      x=t.mean(t.abs(x),3).squeeze();                   // [240,320] mean filter-response magnitude per position
+      return t.stridedSlice(x,[0,0],[240,320],[3,4]);   // [80,80]
     });
     var data=out.dataSync(); out.dispose();
     // robust per-frame normalization (p5..p98)

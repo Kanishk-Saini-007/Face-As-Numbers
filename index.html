@@ -107,9 +107,9 @@ footer a:hover{border-bottom-color:var(--phos)}
       <div class="log" id="log">&gt; standing by — start the camera or load the demo image</div>
     </div>
     <div class="panel">
-      <div class="ptag"><i>02</i> // OUTPUT — NUMERIC PROJECTION</div>
+      <div class="ptag"><i>02</i> // OUTPUT — NETWORK ACTIVATIONS</div>
       <canvas class="stage" id="numCanvas" width="640" height="480"></canvas>
-      <div class="log" id="log2">&gt; each digit is one cell of the frame, weighted by brightness</div>
+      <div class="log" id="log2">&gt; each digit is a real activation value (0-9) sampled live from the detection network's conv layers</div>
     </div>
   </div>
 
@@ -120,6 +120,7 @@ footer a:hover{border-bottom-color:var(--phos)}
       <span>DETECTOR <i>SSD-MNv1</i></span>
       <span>LANDMARKS <i>68pt</i></span>
       <span>EMBEDDING <i>ResNet-34 · 128-D</i></span>
+      <span>WALL SRC <i>SSD conv_0-2 activations</i></span>
       <span>GRID <i id="statGrid">—</i></span>
       <span>FEED <i id="statFeed">—</i></span>
       <span>INFERENCE <i id="statInf">—</i></span>
@@ -149,7 +150,6 @@ function fitWall(){
   if(w===numC.width&&h===numC.height)return;
   numC.width=w; numC.height=h;
   GW=Math.max(40,Math.floor(w/CELL)); GH=Math.max(30,Math.floor(h/CELL));
-  samp.width=GW; samp.height=GH;
   document.getElementById('statGrid').textContent=GW+'x'+GH;
 }
 window.addEventListener('resize',fitWall);
@@ -160,9 +160,9 @@ var pill=document.getElementById('pill'),logEl=document.getElementById('log'),hi
 var btnCam=document.getElementById('btnCam'),btnDemo=document.getElementById('btnDemo'),btnPause=document.getElementById('btnPause');
 var grid=document.getElementById('dgrid'),dstate=document.getElementById('dstate');
 
-// scratch canvas for pixel sampling
-var samp=document.createElement('canvas');samp.width=GW;samp.height=GH;
-var sampX=samp.getContext('2d',{willReadFrequently:true});
+// real activation map state (mapW x mapH floats, 0..1)
+var MAPW=80, MAPH=60;
+var actMap=null, actBusy=false, actCost=0, actEvery=160, lastAct=0;
 // demo source canvas
 var demoC=document.createElement('canvas');demoC.width=W;demoC.height=H;
 var demoX=demoC.getContext('2d');
@@ -402,23 +402,59 @@ function drawOverlay(){
   }
 }
 
+// run the detection network's actual first conv layers (trained weights) on the live frame
+function computeActMap(){
+  if(actBusy||!modelsReady||!srcReady())return;
+  var s=src(); if(!s)return;
+  actBusy=true;
+  var t0=performance.now();
+  try{
+    var t=faceapi.tf;
+    var mv=faceapi.nets.ssdMobilenetv1.params.mobilenetv1;
+    var out=t.tidy(function(){
+      var x=t.fromPixels(s,3).toFloat();
+      x=t.resizeBilinear(x,[240,320]);
+      x=x.div(127.5).sub(1).expandDims(0);
+      x=t.relu(t.add(t.conv2d(x,mv.conv_0.filters,2,'same'),mv.conv_0.batch_norm_offset));
+      x=t.relu(t.add(t.depthwiseConv2d(x,mv.conv_1.depthwise_conv.filters,1,'same'),mv.conv_1.depthwise_conv.batch_norm_offset));
+      x=t.relu(t.add(t.conv2d(x,mv.conv_1.pointwise_conv.filters,1,'valid'),mv.conv_1.pointwise_conv.batch_norm_offset));
+      x=t.relu(t.add(t.depthwiseConv2d(x,mv.conv_2.depthwise_conv.filters,2,'same'),mv.conv_2.depthwise_conv.batch_norm_offset));
+      x=t.relu(t.add(t.conv2d(x,mv.conv_2.pointwise_conv.filters,1,'valid'),mv.conv_2.pointwise_conv.batch_norm_offset));
+      return t.max(x,3).squeeze();  // [60,80] strongest filter response per position
+    });
+    var data=out.dataSync(); out.dispose();
+    // robust per-frame normalization (p5..p98)
+    var sorted=Float32Array.from(data).sort();
+    var lo=sorted[(sorted.length*0.05)|0], hi=sorted[Math.min(sorted.length-1,(sorted.length*0.98)|0)];
+    var rng=Math.max(1e-6,hi-lo);
+    var m=new Float32Array(MAPH*MAPW);
+    for(var i=0;i<data.length;i++){ var v=(data[i]-lo)/rng; m[i]=v<0?0:(v>1?1:v); }
+    actMap=m;
+    actCost=actCost*0.85+(performance.now()-t0)*0.15;
+    actEvery=actCost>140?Math.min(600,actCost*1.6):160;
+  }catch(e){}
+  actBusy=false;
+}
+setInterval(function(){
+  if(paused||mode==='idle')return;
+  if(performance.now()-lastAct<actEvery)return;
+  lastAct=performance.now();
+  computeActMap();
+},120);
+
 function drawWall(){
-  var s=src();
   numX.fillStyle='#040705';numX.fillRect(0,0,numC.width,numC.height);
-  if(!s||!srcReady())return;
-  sampX.drawImage(s,0,0,GW,GH);
-  var data;
-  try{data=sampX.getImageData(0,0,GW,GH).data;}catch(e){return;}
+  if(!actMap)return;
   numX.font='600 '+(CELL+1)+'px JetBrains Mono, monospace';
   numX.textBaseline='top';
   for(var y=0;y<GH;y++){
+    var my=Math.min(MAPH-1,(y/GH*MAPH)|0);
     for(var x=0;x<GW;x++){
-      var o=(y*GW+x)*4;
-      var lum=0.299*data[o]+0.587*data[o+1]+0.114*data[o+2];
-      var bright=lum/255;
-      if(bright<0.07)continue;
-      var d=(Math.random()*10)|0;
-      var a=0.07+Math.pow(bright,1.25)*0.93;
+      var mx=Math.min(MAPW-1,(x/GW*MAPW)|0);
+      var v=actMap[my*MAPW+mx];
+      if(v<0.05)continue;
+      var d=Math.min(9,(v*9.999)|0);
+      var a=0.10+v*0.90;
       numX.fillStyle='rgba(168,255,198,'+a.toFixed(3)+')';
       numX.fillText(d,x*CELL,y*CELL);
     }
@@ -430,7 +466,7 @@ function tick(){
   if(paused||mode==='idle')return;
   drawOverlay();
   var doWall=true;
-  if(wallCost>14){ wallFlip=!wallFlip; doWall=wallFlip; }  // only skip frames if the dense grid is actually costly
+  if(wallCost>16){ wallFlip=!wallFlip; doWall=wallFlip; }  // only skip frames if the dense grid is actually costly
   if(doWall){ var t0=performance.now(); drawWall(); wallCost=wallCost*0.9+(performance.now()-t0)*0.1; }
   requestAnimationFrame(tick);
 }

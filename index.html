@@ -98,6 +98,7 @@ footer a:hover{border-bottom-color:var(--phos)}
   </div>
   <div class="hint" id="hint"><i>// camera blocked or unavailable.</i> allow camera access in the address bar and press START CAMERA again — or run the DEMO IMAGE, no camera needed. everything still runs locally.</div>
   <div class="hint" id="hintBlack"><i>// camera held or black feed - checklist:</i> 1) fully quit WhatsApp Desktop and Teams - from the system tray too, not just the window. 2) Windows Settings &gt; Privacy &amp; security &gt; Camera &gt; allow camera access + let desktop apps access. 3) check the laptop's physical camera shutter or the Fn camera key. 4) press SWITCH CAMERA to try another device. then press START CAMERA again.</div>
+  <div class="hint" id="hintChrome"><i>// chrome sees zero cameras but windows doesn't:</i> 1) Windows Settings &gt; Privacy &amp; security &gt; Camera &gt; turn ON <i>"Let desktop apps access your camera"</i> - this exact toggle hides every camera from chrome while the Windows Camera app still works. 2) open chrome://settings/content/camera - pick your real camera at the top and make sure this site is allowed. 3) fully restart chrome, then press START CAMERA.</div>
 
   <div class="split">
     <div class="panel">
@@ -161,6 +162,7 @@ for(var i=0;i<128;i++){var s=document.createElement('span');s.className='dcell';
 var mode='idle';          // idle | camera | demo
 var stream=null, camIndex=0, camDevs=[], blackStreak=0, feedOk=false;
 var hintB=document.getElementById('hintBlack');
+var hintC=document.getElementById('hintChrome');
 var statFeed=document.getElementById('statFeed');
 var btnSwitch=document.getElementById('btnSwitch');
 var bwC=document.createElement('canvas'); bwC.width=16; bwC.height=12;
@@ -198,7 +200,7 @@ function stopStream(){ if(stream){ stream.getTracks().forEach(function(t){t.stop
 function startCamera(deviceId){
   if(!modelsReady)return;
   stopStream();
-  hint.className='hint'; hintB.className='hint';
+  hint.className='hint'; hintB.className='hint'; hintC.className='hint';
   if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
     setPill('CAMERA UNSUPPORTED','red'); hint.className='hint show'; return;
   }
@@ -227,14 +229,14 @@ function runLadder(attempts, seen){
     var busy=seen.indexOf('NotReadableError')>=0||seen.indexOf('AbortError')>=0;
     if(denied){ setPill('CAMERA BLOCKED','red'); hint.className='hint show'; }
     else if(busy){ setPill('CAMERA BUSY','red'); hintB.className='hint show'; }
-    else { setPill('NO CAMERA','red'); }
-    log('camera ladder exhausted — chrome said: '+(seen.length?seen.join(', '):'nothing'));
+    else { setPill('NO CAMERA','red'); if(camDevs.length===0) hintC.className='hint show'; }
+    log('camera ladder exhausted — chrome said: '+(seen.length?seen.join(', '):'nothing')+' — '+camDevs.length+' video device(s) visible to chrome');
     return;
   }
   var cons=attempts.shift();
   navigator.mediaDevices.getUserMedia(cons).then(function(st){
     stream=st; video.srcObject=st; mode='camera';
-    hint.className='hint'; hintB.className='hint';
+    hint.className='hint'; hintB.className='hint'; hintC.className='hint';
     blackStreak=0; feedOk=false;
     video.onloadeddata=function(){
       if(video.play) video.play().catch(function(){});

@@ -412,8 +412,8 @@ function computeActMap(){
     var t=faceapi.tf;
     var mv=faceapi.nets.ssdMobilenetv1.params.mobilenetv1;
     var out=t.tidy(function(){
-      var x=t.fromPixels(s,3).toFloat();
-      x=t.resizeBilinear(x,[240,320]);
+      var x=t.browser.fromPixels(s,3).toFloat();
+      x=t.image.resizeBilinear(x,[240,320]);
       x=x.div(127.5).sub(1).expandDims(0);
       x=t.relu(t.add(t.conv2d(x,mv.conv_0.filters,2,'same'),mv.conv_0.batch_norm_offset));
       x=t.relu(t.add(t.depthwiseConv2d(x,mv.conv_1.depthwise_conv.filters,1,'same'),mv.conv_1.depthwise_conv.batch_norm_offset));

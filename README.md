@@ -15,7 +15,7 @@ Everything runs 100% in the browser. No server, no uploads - the video never lea
 ## How
 
 - [face-api.js](https://github.com/justadudewhohacks/face-api.js) (vendored, MIT)
-- TinyFace detector for detection, 68-point landmark net, ResNet-34 recognition net for the 128-D embedding
+- SSD MobileNet v1 for detection, 68-point landmark net, ResNet-34 recognition net for the 128-D embedding
 - Model weights vendored in `/models`, served straight from GitHub Pages
 - Canvas for both the overlay and the numbers wall
 

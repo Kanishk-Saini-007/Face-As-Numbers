@@ -114,7 +114,7 @@ footer a:hover{border-bottom-color:var(--phos)}
     <div class="dhead"><span><b>128-D</b> FACE DESCRIPTOR VALUES</span><span id="dstate">NO EMBEDDING</span></div>
     <div class="dgrid" id="dgrid"></div>
     <div class="stats">
-      <span>DETECTOR <i>TinyFace</i></span>
+      <span>DETECTOR <i>SSD-MNv1</i></span>
       <span>LANDMARKS <i>68pt</i></span>
       <span>EMBEDDING <i>ResNet-34 · 128-D</i></span>
       <span>GRID <i id="statGrid">—</i></span>
@@ -169,12 +169,12 @@ function log(m){logEl.innerHTML='&gt; '+m;}
 function loadModels(){
   setPill('LOADING MODELS','amber');
   Promise.all([
-    faceapi.nets.tinyFaceDetector.loadFromUri('models'),
+    faceapi.nets.ssdMobilenetv1.loadFromUri('models'),
     faceapi.nets.faceLandmark68Net.loadFromUri('models'),
     faceapi.nets.faceRecognitionNet.loadFromUri('models')
   ]).then(function(){
     modelsReady=true;
-    detOptions=new faceapi.TinyFaceDetectorOptions({inputSize:320,scoreThreshold:0.35});
+    detOptions=new faceapi.SsdMobilenetv1Options({minConfidence:0.3});
     setPill('CAMERA OFF','amber');
     btnCam.disabled=false;btnDemo.disabled=false;
     log('models loaded — detector + 68pt landmarks + 128-d embedder, all local');
@@ -210,7 +210,7 @@ function startDemo(){
     demoX.fillStyle='#0a0d0d';demoX.fillRect(0,0,W,H);
     // upscale the 150px test face to fill the 4:3 stage
     demoX.imageSmoothingEnabled=true;
-    var s=Math.min(W/img.width,H/img.height)*1.15;
+    var s=Math.min(W/img.width,H/img.height);
     var dw=img.width*s,dh=img.height*s;
     demoX.drawImage(img,(W-dw)/2,(H-dh)/2,dw,dh);
     mode='demo';resume();
@@ -312,7 +312,7 @@ function drawOverlay(){
 
 function drawWall(){
   var s=src();
-  numX.fillStyle='#020403';numX.fillRect(0,0,W,H);
+  numX.fillStyle='#e9e7de';numX.fillRect(0,0,W,H);
   if(!s||!srcReady())return;
   sampX.drawImage(s,0,0,GW,GH);
   var data;
@@ -324,10 +324,10 @@ function drawWall(){
       var o=(y*GW+x)*4;
       var lum=0.299*data[o]+0.587*data[o+1]+0.114*data[o+2];
       var dark=1-lum/255;
-      if(dark<0.1)continue;
+      if(dark<0.05)continue;
       var d=(Math.random()*10)|0;
-      var a=0.08+dark*0.9;
-      numX.fillStyle='rgba(148,255,196,'+a.toFixed(3)+')';
+      var a=0.10+dark*0.88;
+      numX.fillStyle='rgba(20,23,21,'+a.toFixed(3)+')';
       numX.fillText(d,x*CELL,y*CELL);
     }
   }

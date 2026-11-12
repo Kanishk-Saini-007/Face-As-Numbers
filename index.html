@@ -139,15 +139,26 @@ footer a:hover{border-bottom-color:var(--phos)}
 <script>
 (function(){
 "use strict";
-var W=640,H=480,CELL=8;
+var W=640,H=480,CELL=7;
 var GW=Math.floor(W/CELL),GH=Math.floor(H/CELL);
+function fitWall(){
+  var r=numC.getBoundingClientRect();
+  if(!r.width)return;
+  var dpr=Math.min(window.devicePixelRatio||1,2);
+  var w=Math.round(r.width*dpr), h=Math.round(w*3/4);
+  if(w===numC.width&&h===numC.height)return;
+  numC.width=w; numC.height=h;
+  GW=Math.max(40,Math.floor(w/CELL)); GH=Math.max(30,Math.floor(h/CELL));
+  samp.width=GW; samp.height=GH;
+  document.getElementById('statGrid').textContent=GW+'x'+GH;
+}
+window.addEventListener('resize',fitWall);
 var video=document.getElementById('video');
 var camC=document.getElementById('camCanvas'),camX=camC.getContext('2d');
 var numC=document.getElementById('numCanvas'),numX=numC.getContext('2d');
 var pill=document.getElementById('pill'),logEl=document.getElementById('log'),hint=document.getElementById('hint');
 var btnCam=document.getElementById('btnCam'),btnDemo=document.getElementById('btnDemo'),btnPause=document.getElementById('btnPause');
 var grid=document.getElementById('dgrid'),dstate=document.getElementById('dstate');
-document.getElementById('statGrid').textContent=GW+'x'+GH;
 
 // scratch canvas for pixel sampling
 var samp=document.createElement('canvas');samp.width=GW;samp.height=GH;
@@ -240,6 +251,7 @@ function runLadder(attempts, seen){
     blackStreak=0; feedOk=false;
     video.onloadeddata=function(){
       if(video.play) video.play().catch(function(){});
+      fitWall();
       resume();
       var label='';
       try{ label=stream.getVideoTracks()[0].label||''; }catch(e){}
@@ -293,7 +305,7 @@ function startDemo(){
     var s=Math.min(W/img.width,H/img.height);
     var dw=img.width*s,dh=img.height*s;
     demoX.drawImage(img,(W-dw)/2,(H-dh)/2,dw,dh);
-    stopStream(); mode='demo';resume();
+    stopStream(); mode='demo'; fitWall(); resume();
     log('demo frame loaded — sample face from the face-api.js test set');
   }
   if(img.complete&&img.naturalWidth){go();}else{img.onload=go;img.onerror=function(){setPill('DEMO IMAGE MISSING','red');};}
@@ -392,7 +404,7 @@ function drawOverlay(){
 
 function drawWall(){
   var s=src();
-  numX.fillStyle='#e9e7de';numX.fillRect(0,0,W,H);
+  numX.fillStyle='#040705';numX.fillRect(0,0,numC.width,numC.height);
   if(!s||!srcReady())return;
   sampX.drawImage(s,0,0,GW,GH);
   var data;
@@ -403,22 +415,23 @@ function drawWall(){
     for(var x=0;x<GW;x++){
       var o=(y*GW+x)*4;
       var lum=0.299*data[o]+0.587*data[o+1]+0.114*data[o+2];
-      var dark=1-lum/255;
-      if(dark<0.05)continue;
+      var bright=lum/255;
+      if(bright<0.07)continue;
       var d=(Math.random()*10)|0;
-      var a=0.10+dark*0.88;
-      numX.fillStyle='rgba(20,23,21,'+a.toFixed(3)+')';
+      var a=0.07+Math.pow(bright,1.25)*0.93;
+      numX.fillStyle='rgba(168,255,198,'+a.toFixed(3)+')';
       numX.fillText(d,x*CELL,y*CELL);
     }
   }
 }
 
-var wallFlip=false;
+var wallFlip=false, wallCost=0;
 function tick(){
   if(paused||mode==='idle')return;
   drawOverlay();
-  wallFlip=!wallFlip;
-  if(wallFlip)drawWall();   // wall at ~half frame rate: flicker without jank
+  var doWall=true;
+  if(wallCost>14){ wallFlip=!wallFlip; doWall=wallFlip; }  // only skip frames if the dense grid is actually costly
+  if(doWall){ var t0=performance.now(); drawWall(); wallCost=wallCost*0.9+(performance.now()-t0)*0.1; }
   requestAnimationFrame(tick);
 }
 setInterval(detectOnce,140);

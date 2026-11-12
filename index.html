@@ -410,7 +410,7 @@ function computeActMap(){
   if(actBusy||!modelsReady||!srcReady())return;
   var s=src(); if(!s)return;
   var d=lastDet;
-  if(!d||(Date.now()-lastDetAt)>900){ actMap=null; return; }   // quiet idle when no face
+  if(!d||(Date.now()-lastDetAt)>2500){ actMap=null; return; }   // quiet idle when no face
   actBusy=true;
   var t0=performance.now();
   try{
